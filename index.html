@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>광명시 실시간 날씨</title>
+    <style>
+        :root {
+            --bg-color: #f0f4f8;
+            --card-bg: #ffffff;
+            --text-main: #333333;
+            --text-sub: #666666;
+            --accent-color: #3b82f6;
+        }
+
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .weather-card {
+            background: var(--card-bg);
+            border-radius: 24px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+            padding: 30px;
+            width: 100%;
+            max-width: 400px;
+            text-align: center;
+            box-sizing: border-box;
+        }
+
+        .location {
+            font-size: 1.4rem;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+
+        .base-time {
+            font-size: 0.85rem;
+            color: var(--text-sub);
+            margin-bottom: 25px;
+        }
+
+        .main-temp {
+            font-size: 4rem;
+            font-weight: 800;
+            color: var(--accent-color);
+            margin: 20px 0;
+            line-height: 1;
+        }
+
+        .weather-state {
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-bottom: 30px;
+            background: #e0f2fe;
+            color: #0369a1;
+            padding: 6px 16px;
+            border-radius: 20px;
+            display: inline-block;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            border-top: 1px solid #eeeeee;
+            padding-top: 25px;
+        }
+
+        .info-item {
+            background: #fafafa;
+            padding: 12px;
+            border-radius: 12px;
+            text-align: left;
+        }
+
+        .info-label {
+            font-size: 0.8rem;
+            color: var(--text-sub);
+            margin-bottom: 4px;
+        }
+
+        .info-value {
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        .loading {
+            font-size: 1.1rem;
+            color: var(--text-sub);
+        }
+
+        .error-msg {
+            color: #ef4444;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="weather-card" id="weather-card">
+        <div class="loading" id="status-message">날씨 데이터를 가져오는 중입니다...</div>
+    </div>
+
+    <script>
+        // API 설정 값
+        const BASE_URL = 'https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getUltraSrtNcst';
+        const SERVICE_KEY = 'OaRLlfpKOXJH%2BFeghkAojoaSAQbb1bkFF9COvGfjixpiLkEYTHFLqIcBYqFb0HCrcX8H3A47X9QNiRpgcCXAOA%3D%3D';
+        const NX = '58';
+        const NY = '125';
+
+        // 기상청 가이드에 맞춘 실시간 실황 시간 계산기
+        function getBaseDateTime() {
+            const now = new Date();
+            let year = now.getFullYear();
+            let month = String(now.getMonth() + 1).padStart(2, '0');
+            let date = String(now.getDate()).padStart(2, '0');
+            let hours = now.getHours();
+            let minutes = now.getMinutes();
+
+            // 초단기실황은 매시 40분에 생성되므로, 40분 이전이면 '이전 시간' 데이터를 조회해야 함
+            if (minutes < 40) {
+                if (hours === 0) {
+                    // 자정 이전인 경우 전날 23시로 변경
+                    const yesterday = new Date(now.setDate(now.getDate() - 1));
+                    year = yesterday.getFullYear();
+                    month = String(yesterday.getMonth() + 1).padStart(2, '0');
+                    date = String(yesterday.getDate()).padStart(2, '0');
+                    hours = 23;
+                } else {
+                    hours -= 1;
+                }
+            }
+
+            const base_date = `${year}${month}${date}`;
+            const base_time = `${String(hours).padStart(2, '0')}00`;
+
+            return { base_date, base_time, displayTime: `${hours}:00` };
+        }
+
+        async function fetchWeather() {
+            const card = document.getElementById('weather-card');
+            const statusMsg = document.getElementById('status-message');
+            const { base_date, base_time, displayTime } = getBaseDateTime();
+
+            // URL 동적 조립
+            const url = `${BASE_URL}?serviceKey=${SERVICE_KEY}&pageNo=1&numOfRows=1000&dataType=JSON&base_date=${base_date}&base_time=${base_time}&nx=${NX}&ny=${NY}`;
+
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error('네트워크 응답에 문제가 있습니다.');
+                
+                const data = await response.json();
+                
+                // 기상청 에러 결과 확인
+                if (data.response.header.resultCode !== '00') {
+                    throw new Error(data.response.header.resultMsg);
+                }
+
+                const items = data.response.body.items.item;
+                
+                // 데이터 파싱 연산 구조화
+                const weatherData = {};
+                items.forEach(item => {
+                    weatherData[item.category] = parseFloat(item.obsrValue);
+                });
+
+                // 강수 형태(PTY) 텍스트 매핑
+                const ptyMap = { 0: '맑음/구름', 1: '비', 2: '비/눈', 3: '눈', 5: '빗방울', 6: '빗방울눈날림', 7: '눈날림' };
+                const ptyValue = weatherData['PTY'] || 0;
+                let stateText = ptyMap[ptyValue] || '정보 없음';
+
+                // 비가 안 오는데 기온이 높거나 낮을 때의 직관적인 텍스트 보정
+                if (ptyValue === 0) {
+                    if (weatherData['T1H'] >= 30) stateText = '무더위';
+                    else if (weatherData['T1H'] <= 0) stateText = '추위';
+                    else stateText = '쾌적함/맑음';
+                }
+
+                // 카드 UI 업데이트
+                card.innerHTML = `
+                    <div class="location">경기도 광명시</div>
+                    <div class="base-time">기상청 발표 실황 (${displayTime} 기준)</div>
+                    
+                    <div class="main-temp">${weatherData['T1H']}°C</div>
+                    <div class="weather-state">${stateText}</div>
+                    
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <div class="info-label">습도</div>
+                            <div class="info-value">${weatherData['REH']}%</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">시간당 강수량</div>
+                            <div class="info-value">${weatherData['RN1']}mm</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">풍향</div>
+                            <div class="info-value">${getWindDirection(weatherData['VEC'])}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">풍속</div>
+                            <div class="info-value">${weatherData['WSD']}m/s</div>
+                        </div>
+                    </div>
+                `;
+
+            } catch (error) {
+                console.error(error);
+                statusMsg.className = 'loading error-msg';
+                statusMsg.innerText = `날씨 정보를 불러오지 못했습니다.\n(${error.message})`;
+            }
+        }
+
+        // 풍향 각도를 한글 방위로 변환하는 함수
+        function getWindDirection(deg) {
+            if (deg === undefined) return '-';
+            const index = Math.floor((deg + 22.5) / 45) % 8;
+            const directions = ['북풍', '북동풍', '동풍', '남동풍', '남풍', '남서풍', '서풍', '북서풍'];
+            return directions[index];
+        }
+
+        // 앱 실행 시 즉시 호출
+        fetchWeather();
+    </script>
+</body>
+</html>
