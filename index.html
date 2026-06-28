@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>광명시 실시간 날씨</title>
+    <title>경기도 주요 도시 실시간 날씨</title>
     <style>
         :root {
             --bg-color: #f0f4f8;
@@ -11,6 +11,7 @@
             --text-main: #333333;
             --text-sub: #666666;
             --accent-color: #3b82f6;
+            --border-color: #e2e8f0;
         }
 
         body {
@@ -34,6 +35,29 @@
             max-width: 400px;
             text-align: center;
             box-sizing: border-box;
+        }
+
+        /* 도시 선택기 스타일 */
+        .selector-container {
+            margin-bottom: 20px;
+        }
+
+        .city-select {
+            width: 100%;
+            padding: 12px 16px;
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-main);
+            background-color: #fafafa;
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            outline: none;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+
+        .city-select:focus {
+            border-color: var(--accent-color);
         }
 
         .location {
@@ -96,6 +120,7 @@
         .loading {
             font-size: 1.1rem;
             color: var(--text-sub);
+            padding: 40px 0;
         }
 
         .error-msg {
@@ -106,18 +131,42 @@
 </head>
 <body>
 
-    <div class="weather-card" id="weather-card">
-        <div class="loading" id="status-message">날씨 데이터를 가져오는 중입니다...</div>
+    <div class="weather-card">
+        <div class="selector-container">
+            <select id="city-selector" class="city-select">
+                </select>
+        </div>
+
+        <div id="weather-content">
+            <div class="loading" id="status-message">날씨 데이터를 가져오는 중입니다...</div>
+        </div>
     </div>
 
     <script>
-        // API 설정 값
+        // API 기본 설정
         const BASE_URL = 'https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getUltraSrtNcst';
         const SERVICE_KEY = 'OaRLlfpKOXJH%2BFeghkAojoaSAQbb1bkFF9COvGfjixpiLkEYTHFLqIcBYqFb0HCrcX8H3A47X9QNiRpgcCXAOA%3D%3D';
-        const NX = '58';
-        const NY = '125';
 
-        // 기상청 가이드에 맞춘 실시간 실황 시간 계산기
+        // 경기도 주요 도시 및 기상청 격자 좌표(NX, NY) 매핑 데이터
+        const CITY_LIST = [
+            { name: '광명시', nx: '58', ny: '125' },
+            { name: '수원시', nx: '60', ny: '121' },
+            { name: '성남시', nx: '63', ny: '122' },
+            { name: '고양시', nx: '57', ny: '128' },
+            { name: '용인시', nx: '64', ny: '120' },
+            { name: '부천시', nx: '57', ny: '125' },
+            { name: '안산시', nx: '58', ny: '121' },
+            { name: '안양시', nx: '59', ny: '123' },
+            { name: '평택시', nx: '62', ny: '114' },
+            { name: '의정부시', nx: '61', ny: '128' },
+            { name: '화성시', nx: '57', ny: '119' },
+            { name: '파주시', nx: '56', ny: '131' },
+            { name: '김포시', nx: '55', ny: '126' },
+            { name: '광주시', nx: '65', ny: '123' },
+            { name: '이천시', nx: '68', ny: '119' }
+        ];
+
+        // 기상청 가이드에 맞춘 실시간 실황 시간 계산 함수
         function getBaseDateTime() {
             const now = new Date();
             let year = now.getFullYear();
@@ -126,10 +175,9 @@
             let hours = now.getHours();
             let minutes = now.getMinutes();
 
-            // 초단기실황은 매시 40분에 생성되므로, 40분 이전이면 '이전 시간' 데이터를 조회해야 함
+            // 초단기실황은 매시 40분에 생성되므로, 40분 이전이면 '이전 시간' 데이터를 조회
             if (minutes < 40) {
                 if (hours === 0) {
-                    // 자정 이전인 경우 전날 23시로 변경
                     const yesterday = new Date(now.setDate(now.getDate() - 1));
                     year = yesterday.getFullYear();
                     month = String(yesterday.getMonth() + 1).padStart(2, '0');
@@ -146,13 +194,23 @@
             return { base_date, base_time, displayTime: `${hours}:00` };
         }
 
-        async function fetchWeather() {
-            const card = document.getElementById('weather-card');
-            const statusMsg = document.getElementById('status-message');
-            const { base_date, base_time, displayTime } = getBaseDateTime();
+        // 풍향 각도를 한글 방위로 변환하는 함수
+        function getWindDirection(deg) {
+            if (deg === undefined || isNaN(deg)) return '-';
+            const index = Math.floor((deg + 22.5) / 45) % 8;
+            const directions = ['북풍', '북동풍', '동풍', '남동풍', '남풍', '남서풍', '서풍', '북서풍'];
+            return directions[index];
+        }
 
-            // URL 동적 조립
-            const url = `${BASE_URL}?serviceKey=${SERVICE_KEY}&pageNo=1&numOfRows=1000&dataType=JSON&base_date=${base_date}&base_time=${base_time}&nx=${NX}&ny=${NY}`;
+        // 날씨 데이터를 가져와 UI를 업데이트하는 핵심 함수
+        async function fetchWeather(cityName, nx, ny) {
+            const contentArea = document.getElementById('weather-content');
+            
+            // 로딩 상태 표시
+            contentArea.innerHTML = `<div class="loading" id="status-message">${cityName} 날씨 데이터를 가져오는 중입니다...</div>`;
+            
+            const { base_date, base_time, displayTime } = getBaseDateTime();
+            const url = `${BASE_URL}?serviceKey=${SERVICE_KEY}&pageNo=1&numOfRows=1000&dataType=JSON&base_date=${base_date}&base_time=${base_time}&nx=${nx}&ny=${ny}`;
 
             try {
                 const response = await fetch(url);
@@ -160,14 +218,11 @@
                 
                 const data = await response.json();
                 
-                // 기상청 에러 결과 확인
                 if (data.response.header.resultCode !== '00') {
                     throw new Error(data.response.header.resultMsg);
                 }
 
                 const items = data.response.body.items.item;
-                
-                // 데이터 파싱 연산 구조화
                 const weatherData = {};
                 items.forEach(item => {
                     weatherData[item.category] = parseFloat(item.obsrValue);
@@ -178,16 +233,15 @@
                 const ptyValue = weatherData['PTY'] || 0;
                 let stateText = ptyMap[ptyValue] || '정보 없음';
 
-                // 비가 안 오는데 기온이 높거나 낮을 때의 직관적인 텍스트 보정
                 if (ptyValue === 0) {
                     if (weatherData['T1H'] >= 30) stateText = '무더위';
                     else if (weatherData['T1H'] <= 0) stateText = '추위';
                     else stateText = '쾌적함/맑음';
                 }
 
-                // 카드 UI 업데이트
-                card.innerHTML = `
-                    <div class="location">경기도 광명시</div>
+                // 동적 카드 데이터 삽입
+                contentArea.innerHTML = `
+                    <div class="location">경기도 ${cityName}</div>
                     <div class="base-time">기상청 발표 실황 (${displayTime} 기준)</div>
                     
                     <div class="main-temp">${weatherData['T1H']}°C</div>
@@ -215,21 +269,39 @@
 
             } catch (error) {
                 console.error(error);
-                statusMsg.className = 'loading error-msg';
-                statusMsg.innerText = `날씨 정보를 불러오지 못했습니다.\n(${error.message})`;
+                contentArea.innerHTML = `
+                    <div class="loading error-msg" id="status-message">
+                        ${cityName} 날씨 정보를 불러오지 못했습니다.<br>(${error.message})
+                    </div>
+                `;
             }
         }
 
-        // 풍향 각도를 한글 방위로 변환하는 함수
-        function getWindDirection(deg) {
-            if (deg === undefined) return '-';
-            const index = Math.floor((deg + 22.5) / 45) % 8;
-            const directions = ['북풍', '북동풍', '동풍', '남동풍', '남풍', '남서풍', '서풍', '북서풍'];
-            return directions[index];
+        // 초기화 함수
+        function init() {
+            const selector = document.getElementById('city-selector');
+            
+            // 1. 드롭다운 메뉴 생성
+            CITY_LIST.forEach((city, index) => {
+                const option = document.createElement('option');
+                option.value = index;
+                option.textContent = city.name;
+                selector.appendChild(option);
+            });
+
+            // 2. 드롭다운 변경 이벤트 리스너 등록
+            selector.addEventListener('change', (e) => {
+                const selectedCity = CITY_LIST[e.target.value];
+                fetchWeather(selectedCity.name, selectedCity.nx, selectedCity.ny);
+            });
+
+            // 3. 첫 번째 도시(광명시) 기본값으로 첫 호출
+            const defaultCity = CITY_LIST[0];
+            fetchWeather(defaultCity.name, defaultCity.nx, defaultCity.ny);
         }
 
-        // 앱 실행 시 즉시 호출
-        fetchWeather();
+        // 앱 로드 시 실행
+        init();
     </script>
 </body>
 </html>
